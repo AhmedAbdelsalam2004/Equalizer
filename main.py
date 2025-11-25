@@ -7,6 +7,8 @@ import plotly.graph_objects as go
 import uuid
 import json
 import os
+import base64
+import streamlit.components.v1 as components
 
 # ===================================
 # DATA LOADING (PRESETS & FFTS)
@@ -33,13 +35,13 @@ def load_precomputed_ffts():
         metadata_path = os.path.join(fft_dir, "metadata.npy")
         if not os.path.exists(metadata_path):
             return None
-            
+
         metadata = np.load(metadata_path, allow_pickle=True).item()
         fft_sources = []
         for i in range(1, metadata["n_sources"] + 1):
             fft = np.load(os.path.join(fft_dir, f"source_{i}_fft.npy"))
             fft_sources.append(fft)
-            
+
         return {
             "fft_sources": fft_sources,
             "sample_rate": int(metadata["sample_rate"]),
@@ -315,6 +317,34 @@ def amplitude_to_dB_SPL(S, sample_rate, n_fft=1024):
 
 
 # ===================================
+# FFT VISUALIZER UTILITY
+# ===================================
+
+def prepare_visualizer_data(fft_complex, n_bins=64):
+    """
+    Reduce FFT complex array to `n_bins` magnitude values scaled to 0-255.
+    """
+    if fft_complex is None:
+        return [0] * n_bins
+
+    mag = np.abs(fft_complex[:len(fft_complex)//2])
+    if mag.size == 0:
+        return [0] * n_bins
+
+    # split into equal-width bins and average
+    edges = np.linspace(0, len(mag), n_bins + 1, dtype=int)
+    bins = []
+    for i in range(n_bins):
+        s, e = edges[i], edges[i+1]
+        seg = mag[s:e] if e > s else mag[s:s+1]
+        bins.append(float(np.mean(seg)) if seg.size > 0 else 0.0)
+
+    maxv = max(bins) if max(bins) > 0 else 1.0
+    scaled = [int(min(255, max(0, (v / maxv) * 255))) for v in bins]
+    return scaled
+
+
+# ===================================
 # SIGNAL PROCESSING FUNCTIONS
 # ===================================
 
@@ -329,7 +359,7 @@ def apply_gain_mask_to_fft(fft_data, full_freqs, bands, sample_rate):
         high = min(sample_rate / 2, f0 + bw / 2)
         in_band = (np.abs(full_freqs) >= low) & (np.abs(full_freqs) <= high)
         gain_mask[in_band] *= gain
-        
+
     magnitudes = np.abs(fft_data)
     phases = np.angle(fft_data)
     new_magnitudes = magnitudes * gain_mask
@@ -340,16 +370,16 @@ def apply_linear_subtraction(fft_mix, gains, precomputed_data):
     fft_out = fft_mix.copy()
     sources = precomputed_data["fft_sources"]
     n_bins = len(fft_out)
-    
+
     for i, gain in enumerate(gains):
         if i < len(sources):
             src_fft = sources[i]
             limit = min(n_bins, len(src_fft))
             factor = gain - 1.0
-            
+
             if abs(factor) > 1e-5:
                 fft_out[:limit] += factor * src_fft[:limit]
-                
+
     return fft_out
 
 
@@ -406,9 +436,9 @@ st.markdown('<h1 class="main-header">🎵 Signal Equalizer</h1>', unsafe_allow_h
 
 with st.sidebar:
     st.subheader("⚙️ Configuration")
-    
+
     freq_scale = st.radio("Display", ["Linear FFT", "Audiogram (dB HL)"], index=0)
-    
+
     mode_options = ["Generic Mode", "Musical Instruments Mode", "Animal Sounds Mode", "Human Voices Mode"]
     mode_icons = {
         "Generic Mode": "🛠️ Generic",
@@ -416,7 +446,7 @@ with st.sidebar:
         "Animal Sounds Mode": "🦁 Animal Sounds",
         "Human Voices Mode": "🗣️ Human Voices"
     }
-    
+
     mode = st.selectbox(
         "Mode:",
         mode_options,
@@ -471,19 +501,277 @@ if uploaded_file is not None:
 
 
 # ===================================
+# AUDIO PLAYER/VISUALIZER COMPONENT
+# ===================================
+
+def create_audio_visualizer(audio_b64, player_id, sample_rate):
+    """Create an audio player with real-time FFT visualization"""
+    html_code = f"""
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+body {{ margin: 0; padding: 0; font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; }}
+.audio-player {{
+  background: linear-gradient(135deg, #0f1724 0%, #1a2332 100%);
+  color: #e6eef8;
+  border: 1px solid #2563eb;
+  padding: 16px;
+  border-radius: 12px;
+  box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+}}
+.canvas-wrap {{ 
+  margin-bottom: 12px;
+  position: relative; 
+  background: #0a0f1a;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid #1e3a5f;
+  width: 100%;
+}}
+canvas {{ display: block; width: 100%; height: 120px; background: #0a0f1a; }}
+.controls {{ 
+  display: flex; 
+  gap: 10px; 
+  align-items: center; 
+  justify-content: space-between;
+}}
+.control-buttons {{ display: flex; gap: 8px; }}
+.btn {{
+  background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+  color: white; 
+  border: none; 
+  padding: 10px 16px; 
+  border-radius: 8px; 
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+}}
+.btn:hover {{ 
+  background: linear-gradient(135deg, #1d4ed8 0%, #1e40af 100%);
+}}
+.btn:active {{ transform: scale(0.98); }}
+.time-info {{ 
+  font-size: 13px; 
+  color: #cbd5e1;
+}}
+.status {{ 
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  font-size: 11px;
+  color: #38bdf8;
+  background: rgba(0,0,0,0.5);
+  padding: 4px 8px;
+  border-radius: 4px;
+}}
+</style>
+</head>
+<body>
+<div class="audio-player">
+  <div class="canvas-wrap">
+    <canvas id="canvas-{player_id}"></canvas>
+    <div class="status" id="status-{player_id}">Ready</div>
+  </div>
+  
+  <div class="controls">
+    <div class="control-buttons">
+      <button class="btn" id="play-btn-{player_id}">▶ Play</button>
+      <button class="btn" id="stop-btn-{player_id}">⏹ Stop</button>
+    </div>
+    <div class="time-info" id="time-{player_id}">0:00 / 0:00</div>
+  </div>
+</div>
+
+<script>
+(function() {{
+  const canvas = document.getElementById('canvas-{player_id}');
+  const ctx = canvas.getContext('2d');
+  const playBtn = document.getElementById('play-btn-{player_id}');
+  const stopBtn = document.getElementById('stop-btn-{player_id}');
+  const timeDisplay = document.getElementById('time-{player_id}');
+  const statusDisplay = document.getElementById('status-{player_id}');
+  
+  let audioContext;
+  let analyser;
+  let audioBuffer;
+  let source;
+  let isPlaying = false;
+  let animationId = null;
+  let startTime = 0;
+  let pauseTime = 0;
+  const audioData = 'data:audio/wav;base64,{audio_b64}';
+  
+  function formatTime(seconds) {{
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return mins + ':' + (secs < 10 ? '0' : '') + secs;
+  }}
+  
+  function updateTimeDisplay() {{
+    if (!audioBuffer) return;
+    const duration = audioBuffer.duration;
+    const current = isPlaying ? Math.min(audioContext.currentTime - startTime + pauseTime, duration) : pauseTime;
+    timeDisplay.textContent = formatTime(current) + ' / ' + formatTime(duration);
+  }}
+  
+  function resizeCanvas() {{
+    const rect = canvas.getBoundingClientRect();
+    canvas.width = rect.width;
+    canvas.height = 120;
+  }}
+  
+  function drawVisualization() {{
+    if (!analyser) return;
+    
+    const bufferLength = analyser.frequencyBinCount;
+    const dataArray = new Uint8Array(bufferLength);
+    analyser.getByteFrequencyData(dataArray);
+    
+    const width = canvas.width;
+    const height = canvas.height;
+    
+    ctx.fillStyle = '#0a0f1a';
+    ctx.fillRect(0, 0, width, height);
+    
+    const barWidth = width / bufferLength;
+    const gradient = ctx.createLinearGradient(0, height, width, 0);
+    gradient.addColorStop(0, '#38bdf8');
+    gradient.addColorStop(0.5, '#3b82f6');
+    gradient.addColorStop(1, '#8b5cf6');
+    
+    for (let i = 0; i < bufferLength; i++) {{
+      const barHeight = (dataArray[i] / 255) * height * 0.95;
+      const x = i * barWidth;
+      const y = height - barHeight;
+      
+      ctx.fillStyle = gradient;
+      ctx.fillRect(x, y, barWidth - 1, barHeight);
+      
+      if (barHeight > 3) {{
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
+        ctx.fillRect(x, y, barWidth - 1, 2);
+      }}
+    }}
+    
+    updateTimeDisplay();
+    
+    if (isPlaying) {{
+      animationId = requestAnimationFrame(drawVisualization);
+    }}
+  }}
+  
+  async function initAudio() {{
+    if (audioContext) return;
+    
+    try {{
+      const response = await fetch(audioData);
+      const arrayBuffer = await response.arrayBuffer();
+      audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+      analyser = audioContext.createAnalyser();
+      analyser.fftSize = 256;
+      analyser.smoothingTimeConstant = 0.8;
+      analyser.connect(audioContext.destination);
+      statusDisplay.textContent = 'Ready';
+      updateTimeDisplay();
+    }} catch (error) {{
+      console.error('Audio init error:', error);
+      statusDisplay.textContent = 'Error';
+    }}
+  }}
+  
+  async function play() {{
+    if (!audioContext) await initAudio();
+    if (isPlaying) return;
+    
+    source = audioContext.createBufferSource();
+    source.buffer = audioBuffer;
+    source.connect(analyser);
+    
+    startTime = audioContext.currentTime;
+    source.start(0, pauseTime);
+    
+    source.onended = () => {{
+      isPlaying = false;
+      pauseTime = 0;
+      playBtn.textContent = '▶ Play';
+      statusDisplay.textContent = 'Finished';
+      if (animationId) cancelAnimationFrame(animationId);
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+    }};
+    
+    isPlaying = true;
+    playBtn.textContent = '⏸ Pause';
+    statusDisplay.textContent = 'Playing';
+    drawVisualization();
+  }}
+  
+  function pause() {{
+    if (!isPlaying) return;
+    source.stop();
+    pauseTime += audioContext.currentTime - startTime;
+    isPlaying = false;
+    playBtn.textContent = '▶ Play';
+    statusDisplay.textContent = 'Paused';
+    if (animationId) cancelAnimationFrame(animationId);
+  }}
+  
+  function stop() {{
+    if (source) source.stop();
+    isPlaying = false;
+    pauseTime = 0;
+    playBtn.textContent = '▶ Play';
+    statusDisplay.textContent = 'Stopped';
+    if (animationId) cancelAnimationFrame(animationId);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    updateTimeDisplay();
+  }}
+  
+  playBtn.onclick = async () => {{
+    if (isPlaying) pause();
+    else await play();
+  }};
+  
+  stopBtn.onclick = stop;
+  
+  window.addEventListener('load', () => {{
+    resizeCanvas();
+    initAudio();
+  }});
+  
+  window.addEventListener('resize', () => {{
+    resizeCanvas();
+  }});
+}})();
+</script>
+</body>
+</html>
+"""
+    components.html(html_code, height=240, scrolling=False)
+
+
+# ===================================
 # Main Layout - LAYOUT SETUP
 # ===================================
 
 if st.session_state.audio_data is not None:
     col1, col2 = st.columns([1, 1])
 
-    # STEP 2: Render Input Signal
+    # STEP 2: Render Input Signal with Audio Visualizer
     with col1:
         st.markdown("#### 📊 Input")
         st.success(f"✅ {uploaded_file.name}")
+
+        # Convert input audio to base64 for HTML audio element
+        input_bytes = io.BytesIO()
+        sf.write(input_bytes, st.session_state.audio_data, st.session_state.sample_rate, format='WAV')
+        input_bytes.seek(0)
+        input_audio_b64 = base64.b64encode(input_bytes.read()).decode()
         
-        st.audio(uploaded_file, format='audio/wav')
-        
+        # Create audio player/visualizer for input
+        create_audio_visualizer(input_audio_b64, "input", st.session_state.sample_rate)
+
         if freq_scale == "Linear FFT":
             st.plotly_chart(st.session_state.input_fft_linear, use_container_width=True)
         else:
@@ -510,7 +798,6 @@ if st.session_state.audio_data is not None:
         for idx, band in enumerate(st.session_state.eq_bands, start=1):
             with st.container():
                 st.markdown('<div class="band-container">', unsafe_allow_html=True)
-                # CHANGE: 3 columns for Generic Mode band sliders
                 cols = st.columns([3, 3, 3, 1])
                 freq = cols[0].slider(f"Freq (Hz)", 20, st.session_state.sample_rate // 2, int(band["freq"]), key=f"f_{band['id']}")
                 gain = cols[1].slider(f"Gain", 0.0, 2.0, float(band["gain"]), key=f"g_{band['id']}")
@@ -537,12 +824,11 @@ if st.session_state.audio_data is not None:
             st.warning(f"No preset for '{mode}'")
         else:
             sources = PRESETS[mode]
-            # CHANGE: Increased to 4 columns for max compactness
             cols = st.columns(4) 
             source_gains = []
-            
+
             for i, source_name in enumerate(sources):
-                with cols[i % 4]: # cycle through 4 columns
+                with cols[i % 4]:
                     gain = st.slider(
                         source_name.capitalize(),
                         0.0, 2.0, 1.0,
@@ -565,7 +851,7 @@ if st.session_state.audio_data is not None:
                         g_idx += 1
                         for center, bw in sources[s_name]:
                             preset_bands.append({"freq": center, "gain": g_val, "bandwidth": bw})
-                    
+
                     modified_fft = apply_gain_mask_to_fft(
                         st.session_state.fft_data,
                         st.session_state.full_freqs,
@@ -581,45 +867,39 @@ else:
 
 
 # ===================================
-# Main Layout - OUTPUT DISPLAY (Delayed)
+# Main Layout - OUTPUT DISPLAY
 # ===================================
 
-if st.session_state.audio_data is not None:
+if st.session_state.audio_data is not None and st.session_state.eq_applied:
     with col2:
-        st.markdown("#### 🔊 Output")
-        if st.session_state.eq_applied:
-            st.success("✅ Ready")
-            
-            out_buffer = io.BytesIO()
-            sf.write(out_buffer, np.clip(st.session_state.equalized_audio, -1, 1), st.session_state.sample_rate,
-                     format='WAV')
-            out_buffer.seek(0)
-            
-            st.audio(out_buffer, format='audio/wav')
-            
-            if freq_scale == "Linear FFT":
-                st.plotly_chart(st.session_state.output_fft_linear, use_container_width=True)
-            else:
-                st.plotly_chart(st.session_state.output_audiogram, use_container_width=True)
-        else:
-            st.info("Adjust sliders")
+        st.markdown("#### 📊 Output")
+        
+        # Convert equalized audio to base64 for HTML audio element
+        equalized_bytes = io.BytesIO()
+        sf.write(equalized_bytes, st.session_state.equalized_audio, st.session_state.sample_rate, format='WAV')
+        equalized_bytes.seek(0)
+        output_audio_b64 = base64.b64encode(equalized_bytes.read()).decode()
+        
+        # Create audio player/visualizer for output
+        create_audio_visualizer(output_audio_b64, "output", st.session_state.sample_rate)
 
+        if freq_scale == "Linear FFT":
+            st.plotly_chart(st.session_state.output_fft_linear, use_container_width=True)
+        else:
+            st.plotly_chart(st.session_state.output_audiogram, use_container_width=True)
 
 # ===================================
-# SPECTROGRAM VIEW (COMPACT)
+# Spectrograms (if space available)
 # ===================================
 
 if st.session_state.audio_data is not None:
-    with st.expander("📈 Spectrogram View", expanded=False):
-        spec_col1, spec_col2 = st.columns(2)
-        
-        with spec_col1:
-            st.caption("Input Spectrogram")
+    st.markdown("---")
+    spec_col1, spec_col2 = st.columns([1, 1])
+    
+    with spec_col1:
+        if st.session_state.input_spectrogram is not None:
             st.plotly_chart(st.session_state.input_spectrogram, use_container_width=True)
-
-        with spec_col2:
-            st.caption("Output Spectrogram")
-            if st.session_state.eq_applied and st.session_state.output_spectrogram is not None:
-                st.plotly_chart(st.session_state.output_spectrogram, use_container_width=True)
-            else:
-                st.info("Adjust sliders")
+    
+    with spec_col2:
+        if st.session_state.eq_applied and st.session_state.output_spectrogram is not None:
+            st.plotly_chart(st.session_state.output_spectrogram, use_container_width=True)
