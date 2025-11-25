@@ -60,11 +60,45 @@ st.set_page_config(
     layout="wide"
 )
 
+# --- ULTRA-COMPACT CSS STYLING ---
 st.markdown("""
 <style>
-    .main-header { font-size: 2.5rem; color: #1f77b4; text-align: center; margin-bottom: 2rem; }
-    .band-container { background-color: #f8f9fa; padding: 1.2rem; border-radius: 10px; margin-bottom: 1rem; border-left: 5px solid #1f77b4; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
-    .stMetric { background-color: #f0f2f6; padding: 10px; border-radius: 5px; text-align: center; }
+    /* Reduce top padding of the main container */
+    .main > div { padding-top: 0.5rem; }
+    .block-container { padding-top: 1rem; padding-bottom: 0rem; }
+    
+    /* Header adjustments */
+    .main-header { font-size: 1.5rem; color: #1f77b4; text-align: center; margin-bottom: 0.5rem; margin-top: 0; }
+    h1, h2, h3 { margin-top: 0.1rem !important; margin-bottom: 0.1rem !important; }
+    
+    /* Compact Band Container */
+    .band-container { 
+        background-color: #f8f9fa; 
+        padding: 0.3rem 0.6rem; 
+        border-radius: 6px; 
+        margin-bottom: 0.2rem; 
+        border-left: 3px solid #1f77b4; 
+        box-shadow: 0 1px 2px rgba(0,0,0,0.05); 
+    }
+    
+    /* COMPACT SLIDERS */
+    .stSlider {
+        padding-top: 0rem !important;
+        padding-bottom: 0rem !important;
+        margin-top: -15px !important;
+        margin-bottom: -5px !important;
+    }
+    
+    .stSlider label {
+        font-size: 13px !important;
+        padding-bottom: 0rem !important;
+    }
+    
+    /* Tighter Widget Spacing */
+    div[data-testid="stVerticalBlock"] > div { gap: 0.3rem !important; }
+    div[data-testid="column"] { padding: 0rem; }
+    
+    .stAudio { margin-top: 0rem; margin-bottom: 0.2rem; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -137,7 +171,7 @@ def magnitude_to_dB_SPL(magnitude, sample_rate):
 
 
 # ===================================
-# DYNAMIC PLOTLY PLOTS
+# DYNAMIC PLOTLY PLOTS (COMPACT)
 # ===================================
 
 def create_dynamic_fft_plot(fft_data, sample_rate, title, color):
@@ -157,15 +191,15 @@ def create_dynamic_fft_plot(fft_data, sample_rate, title, color):
         fillcolor=f"rgba{tuple(int(color.lstrip('#')[i:i+2], 16) for i in (0, 2, 4)) + (0.1,)}" if color.startswith('#') else color
     ))
     fig.update_layout(
-        title=dict(text=title, font=dict(size=14)),
+        title=dict(text=title, font=dict(size=12)),
         xaxis_title="Frequency (Hz)",
         yaxis_title="Magnitude",
-        margin=dict(l=20, r=20, t=40, b=20),
+        margin=dict(l=35, r=10, t=30, b=10),
         xaxis=dict(showgrid=True, gridcolor='#eee', rangeslider=dict(visible=False)),
         yaxis=dict(showgrid=True, gridcolor='#eee'),
         plot_bgcolor='rgba(0,0,0,0)',
         hovermode="x unified",
-        height=300
+        height=220
     )
     return fig
 
@@ -200,10 +234,10 @@ def create_dynamic_audiogram_plot(fft_data, sample_rate, title, color):
         name=title
     ))
     fig.update_layout(
-        title=dict(text=title, font=dict(size=14)),
+        title=dict(text=title, font=dict(size=12)),
         xaxis_title="Frequency (Hz)",
         yaxis_title="Hearing Level (dB HL)",
-        margin=dict(l=20, r=20, t=40, b=20),
+        margin=dict(l=35, r=10, t=30, b=10),
         xaxis=dict(
             type="log",
             tickvals=visible_freqs,
@@ -219,13 +253,12 @@ def create_dynamic_audiogram_plot(fft_data, sample_rate, title, color):
         ),
         plot_bgcolor='rgba(0,0,0,0)',
         hovermode="x unified",
-        height=300
+        height=220
     )
     return fig
 
 
 def create_dynamic_spectrogram(spectrogram, sample_rate, n_fft=1024, hop_length=512, title="Spectrogram (dB SPL)"):
-    """Create interactive Plotly spectrogram."""
     times = np.arange(spectrogram.shape[1]) * hop_length / sample_rate
     freqs = np.linspace(0, sample_rate / 2, spectrogram.shape[0])
 
@@ -240,11 +273,11 @@ def create_dynamic_spectrogram(spectrogram, sample_rate, n_fft=1024, hop_length=
         hovertemplate="Time: %{x:.2f}s<br>Frequency: %{y:.0f} Hz<br>dB SPL: %{z:.1f}<extra></extra>"
     ))
     fig.update_layout(
-        title=dict(text=title, font=dict(size=14)),
+        title=dict(text=title, font=dict(size=12)),
         xaxis_title="Time (s)",
         yaxis_title="Frequency (Hz)",
-        margin=dict(l=20, r=20, t=40, b=20),
-        height=300
+        margin=dict(l=35, r=10, t=30, b=10),
+        height=200
     )
     return fig
 
@@ -286,7 +319,6 @@ def amplitude_to_dB_SPL(S, sample_rate, n_fft=1024):
 # ===================================
 
 def apply_gain_mask_to_fft(fft_data, full_freqs, bands, sample_rate):
-    """Old logic: Filters frequency bands. Used for Generic Mode."""
     N = len(fft_data)
     gain_mask = np.ones(N, dtype=np.float32)
     for band in bands:
@@ -305,20 +337,14 @@ def apply_gain_mask_to_fft(fft_data, full_freqs, bands, sample_rate):
 
 
 def apply_linear_subtraction(fft_mix, gains, precomputed_data):
-    """New logic: Linearly subtracts/adds source FFTs based on gain."""
     fft_out = fft_mix.copy()
     sources = precomputed_data["fft_sources"]
     n_bins = len(fft_out)
     
-    # We map slider 1 -> source 1, slider 2 -> source 2, etc.
     for i, gain in enumerate(gains):
         if i < len(sources):
             src_fft = sources[i]
-            
-            # Ensure dimensions match
             limit = min(n_bins, len(src_fft))
-            
-            # Formula: Mix + (Gain - 1.0) * Source
             factor = gain - 1.0
             
             if abs(factor) > 1e-5:
@@ -328,30 +354,25 @@ def apply_linear_subtraction(fft_mix, gains, precomputed_data):
 
 
 def process_output_fft(modified_fft, original_audio_data, sample_rate):
-    """Processes the modified FFT back to audio, calculates new plots, and updates state."""
-    
-    # Inverse FFT and Truncate
     equalized_full = cooley_tukey_ifft(modified_fft)
     equalized_audio = equalized_full[:len(original_audio_data)]
     st.session_state.equalized_audio = equalized_audio
     st.session_state.eq_applied = True
 
-    # Re-FFT for plotting (padding if necessary)
     N_orig = len(equalized_audio)
     N_pad = next_power_of_two(N_orig)
     eq_padded = np.pad(equalized_audio, (0, N_pad - N_orig),
                        mode='constant') if N_pad > N_orig else equalized_audio
     eq_fft = cooley_tukey_fft(eq_padded)
 
-    # Generate new plots and update session state
-    st.session_state.output_fft_linear = create_dynamic_fft_plot(eq_fft, sample_rate, "Output Signal FFT", 'orange')
+    st.session_state.output_fft_linear = create_dynamic_fft_plot(eq_fft, sample_rate, "Output FFT", 'orange')
     st.session_state.output_audiogram = create_dynamic_audiogram_plot(eq_fft, sample_rate,
-                                                             "Output Audiogram (dB HL)", 'orange')
+                                                             "Output Audiogram", 'orange')
 
     S_output = custom_stft(equalized_audio, n_fft=1024, hop_length=512)
     S_output_dB = amplitude_to_dB_SPL(S_output, sample_rate, n_fft=1024)
     st.session_state.output_spectrogram = create_dynamic_spectrogram(S_output_dB, sample_rate, 1024, 512,
-                                                            "Output Signal (dB SPL)")
+                                                            "Output Spectrogram")
 
     return equalized_audio
 
@@ -384,28 +405,25 @@ if 'initialized' not in st.session_state:
 st.markdown('<h1 class="main-header">🎵 Signal Equalizer</h1>', unsafe_allow_html=True)
 
 with st.sidebar:
-    st.header("⚙️ Configuration")
+    st.subheader("⚙️ Configuration")
     
-    # Removed "How to Use" expander
-        
-    freq_scale = st.radio("Display Mode", ["Linear FFT", "Audiogram (dB HL)"], index=0)
+    freq_scale = st.radio("Display", ["Linear FFT", "Audiogram (dB HL)"], index=0)
     
-    # --- Mode Selection with Icons ---
     mode_options = ["Generic Mode", "Musical Instruments Mode", "Animal Sounds Mode", "Human Voices Mode"]
     mode_icons = {
-        "Generic Mode": "🛠️ Generic Mode",
-        "Musical Instruments Mode": "🎻 Musical Instruments Mode",
-        "Animal Sounds Mode": "🦁 Animal Sounds Mode",
-        "Human Voices Mode": "🗣️ Human Voices Mode"
+        "Generic Mode": "🛠️ Generic",
+        "Musical Instruments Mode": "🎻 Musical Instruments",
+        "Animal Sounds Mode": "🦁 Animal Sounds",
+        "Human Voices Mode": "🗣️ Human Voices"
     }
     
     mode = st.selectbox(
-        "Select Mode:",
+        "Mode:",
         mode_options,
         format_func=lambda x: mode_icons.get(x, x)
     )
 
-    uploaded_file = st.file_uploader("📂 Upload Audio File", type=['wav', 'mp3', 'flac', 'm4a', 'aac'])
+    uploaded_file = st.file_uploader("📂 Upload Audio", type=['wav', 'mp3', 'flac'])
 
 # ===================================
 # Load & Preprocess (ONCE ONLY)
@@ -421,18 +439,18 @@ if uploaded_file is not None:
         N_pad = next_power_of_two(N_orig)
         audio_padded = np.pad(audio_data, (0, N_pad - N_orig), mode='constant') if N_pad > N_orig else audio_data
 
-        with st.spinner("⏳ Analyzing signal..."):
+        with st.spinner("⏳ Analyzing..."):
             try:
                 fft_data = cooley_tukey_fft(audio_padded)
                 full_freqs = np.fft.fftfreq(len(fft_data), d=1 / sample_rate)
 
-                input_fft_linear = create_dynamic_fft_plot(fft_data, sample_rate, "Input Signal FFT", 'steelblue')
-                input_audiogram = create_dynamic_audiogram_plot(fft_data, sample_rate, "Input Audiogram (dB HL)",
+                input_fft_linear = create_dynamic_fft_plot(fft_data, sample_rate, "Input FFT", 'steelblue')
+                input_audiogram = create_dynamic_audiogram_plot(fft_data, sample_rate, "Input Audiogram",
                                                                 'steelblue')
 
                 S_input = custom_stft(audio_data, n_fft=1024, hop_length=512)
                 S_input_dB = amplitude_to_dB_SPL(S_input, sample_rate, n_fft=1024)
-                input_spectrogram = create_dynamic_spectrogram(S_input_dB, sample_rate, 1024, 512, "Input Signal (dB SPL)")
+                input_spectrogram = create_dynamic_spectrogram(S_input_dB, sample_rate, 1024, 512, "Input Spectrogram")
 
                 st.session_state.audio_data = audio_data
                 st.session_state.sample_rate = sample_rate
@@ -449,28 +467,23 @@ if uploaded_file is not None:
                 st.session_state.output_spectrogram = None
                 st.session_state.eq_applied = False
             except Exception as e:
-                st.error(f"Processing Error: {e}")
+                st.error(f"Error: {e}")
 
 
 # ===================================
 # Main Layout - LAYOUT SETUP
 # ===================================
 
-# STEP 1: Create the layout columns FIRST
 if st.session_state.audio_data is not None:
     col1, col2 = st.columns([1, 1])
 
-    # STEP 2: Render Input Signal IMMEDIATELY into col1
+    # STEP 2: Render Input Signal
     with col1:
-        st.header("📊 Input Signal")
-        st.success(f"✅ Loaded: {uploaded_file.name}")
+        st.markdown("#### 📊 Input")
+        st.success(f"✅ {uploaded_file.name}")
         
-        # Removed Sample Rate & Duration Metrics
-        
-        st.subheader("🎧 Input Playback")
         st.audio(uploaded_file, format='audio/wav')
         
-        st.subheader("📉 Signal Visualization")
         if freq_scale == "Linear FFT":
             st.plotly_chart(st.session_state.input_fft_linear, use_container_width=True)
         else:
@@ -478,16 +491,13 @@ if st.session_state.audio_data is not None:
 
 
 # ===================================
-# Equalizer Controls (Process Logic)
+# Equalizer Controls
 # ===================================
 
-st.divider()
-st.header("🎛️ Equalizer Controls")
-
 if st.session_state.audio_data is not None:
-    if mode == "Generic Mode":
-        st.subheader("🛠️ Parametric Equalizer")
+    st.markdown(f"#### 🎛️ {mode}")
 
+    if mode == "Generic Mode":
         if st.button("➕ Add Band"):
             st.session_state.eq_bands.append({
                 "id": str(uuid.uuid4()),
@@ -500,142 +510,116 @@ if st.session_state.audio_data is not None:
         for idx, band in enumerate(st.session_state.eq_bands, start=1):
             with st.container():
                 st.markdown('<div class="band-container">', unsafe_allow_html=True)
-                st.markdown(f"**🔹 Band {idx}**")
-                freq = st.slider("🎯 Center Frequency (Hz)", 20, st.session_state.sample_rate // 2, int(band["freq"]),
-                                 key=f"freq_{band['id']}")
-                gain = st.slider("🔊 Gain", 0.0, 2.0, float(band["gain"]), key=f"gain_{band['id']}")
-                bw = st.slider("📉 Bandwidth (Hz)", 10, min(5000, st.session_state.sample_rate // 2),
-                               int(band["bandwidth"]),
-                               key=f"bw_{band['id']}")
-                band.update({"freq": freq, "gain": gain, "bandwidth": bw})
-                if st.button(f"🗑️ Delete Band {idx}", key=f"del_{band['id']}"):
+                # CHANGE: 3 columns for Generic Mode band sliders
+                cols = st.columns([3, 3, 3, 1])
+                freq = cols[0].slider(f"Freq (Hz)", 20, st.session_state.sample_rate // 2, int(band["freq"]), key=f"f_{band['id']}")
+                gain = cols[1].slider(f"Gain", 0.0, 2.0, float(band["gain"]), key=f"g_{band['id']}")
+                bw = cols[2].slider(f"Width", 10, 5000, int(band["bandwidth"]), key=f"b_{band['id']}")
+                if cols[3].button("🗑️", key=f"d_{band['id']}"):
                     st.session_state.eq_bands = [b for b in st.session_state.eq_bands if b["id"] != band["id"]]
                     st.rerun()
+                band.update({"freq": freq, "gain": gain, "bandwidth": bw})
                 st.markdown('</div>', unsafe_allow_html=True)
 
-        # --- Auto-Apply Logic with Spinner ---
         if st.session_state.fft_data is not None and st.session_state.eq_bands:
-            with st.spinner("Adjusting frequencies..."):
-                modified_fft = apply_gain_mask_to_fft(
-                    st.session_state.fft_data,
-                    st.session_state.full_freqs,
-                    st.session_state.eq_bands,
-                    st.session_state.sample_rate
-                )
-                process_output_fft(modified_fft, st.session_state.audio_data, st.session_state.sample_rate)
+            modified_fft = apply_gain_mask_to_fft(
+                st.session_state.fft_data,
+                st.session_state.full_freqs,
+                st.session_state.eq_bands,
+                st.session_state.sample_rate
+            )
+            process_output_fft(modified_fft, st.session_state.audio_data, st.session_state.sample_rate)
 
 
     else:
-        # --- CUSTOM MODES ---
-        st.subheader(f"🎛️ {mode}")
-
+        # CUSTOM MODES
         if mode not in PRESETS:
-            st.warning(f"No preset found for '{mode}'. Check presets.json.")
+            st.warning(f"No preset for '{mode}'")
         else:
             sources = PRESETS[mode]
-            num_sources = len(sources)
-            cols = st.columns(min(3, num_sources)) 
-            
+            # CHANGE: Increased to 4 columns for max compactness
+            cols = st.columns(4) 
             source_gains = []
             
             for i, source_name in enumerate(sources):
-                with cols[i % len(cols)]:
+                with cols[i % 4]: # cycle through 4 columns
                     gain = st.slider(
                         source_name.capitalize(),
                         0.0, 2.0, 1.0,
-                        key=f"preset_{mode}_{source_name}",
-                        label_visibility="visible"
+                        key=f"preset_{mode}_{source_name}"
                     )
                     source_gains.append(gain)
 
-            # --- Auto-Apply Logic with Spinner ---
             if st.session_state.fft_data is not None:
-                with st.spinner("Adjusting frequencies..."):
-                    # CHECK: Do we have precomputed FFTs available?
-                    if PRECOMPUTED_DATA is not None:
-                        # Use NEW Logic: Linear Spectral Subtraction
-                        modified_fft = apply_linear_subtraction(
-                            st.session_state.fft_data,
-                            source_gains,
-                            PRECOMPUTED_DATA
-                        )
-                    else:
-                        # FALLBACK: Use OLD Logic (Frequency Bands) if precomputed data missing
-                        preset_bands = []
-                        g_idx = 0
-                        for s_name in sources:
-                            g_val = source_gains[g_idx]
-                            g_idx += 1
-                            for center, bw in sources[s_name]:
-                                preset_bands.append({"freq": center, "gain": g_val, "bandwidth": bw})
-                        
-                        modified_fft = apply_gain_mask_to_fft(
-                            st.session_state.fft_data,
-                            st.session_state.full_freqs,
-                            preset_bands,
-                            st.session_state.sample_rate
-                        )
+                if PRECOMPUTED_DATA is not None:
+                    modified_fft = apply_linear_subtraction(
+                        st.session_state.fft_data,
+                        source_gains,
+                        PRECOMPUTED_DATA
+                    )
+                else:
+                    preset_bands = []
+                    g_idx = 0
+                    for s_name in sources:
+                        g_val = source_gains[g_idx]
+                        g_idx += 1
+                        for center, bw in sources[s_name]:
+                            preset_bands.append({"freq": center, "gain": g_val, "bandwidth": bw})
+                    
+                    modified_fft = apply_gain_mask_to_fft(
+                        st.session_state.fft_data,
+                        st.session_state.full_freqs,
+                        preset_bands,
+                        st.session_state.sample_rate
+                    )
 
-                    process_output_fft(modified_fft, st.session_state.audio_data, st.session_state.sample_rate)
+                process_output_fft(modified_fft, st.session_state.audio_data, st.session_state.sample_rate)
 
 
 else:
-    st.info("👆 Upload an audio file first to see equalizer controls")
+    st.info("👆 Upload an audio file")
 
 
 # ===================================
 # Main Layout - OUTPUT DISPLAY (Delayed)
 # ===================================
 
-# STEP 4: Now that calculations are done, go back and fill col2!
 if st.session_state.audio_data is not None:
     with col2:
-        st.header("🔊 Output Signal")
+        st.markdown("#### 🔊 Output")
         if st.session_state.eq_applied:
-            st.success("✅ Equalized signal ready!")
+            st.success("✅ Ready")
             
-            # Prepare audio buffer for output playback
             out_buffer = io.BytesIO()
             sf.write(out_buffer, np.clip(st.session_state.equalized_audio, -1, 1), st.session_state.sample_rate,
                      format='WAV')
             out_buffer.seek(0)
             
-            st.subheader("🎧 Output Playback")
             st.audio(out_buffer, format='audio/wav')
             
-            st.subheader("📉 Signal Visualization")
             if freq_scale == "Linear FFT":
                 st.plotly_chart(st.session_state.output_fft_linear, use_container_width=True)
             else:
                 st.plotly_chart(st.session_state.output_audiogram, use_container_width=True)
         else:
-            st.info("Adjust sliders below to process signal")
+            st.info("Adjust sliders")
 
 
 # ===================================
-# SPECTROGRAM VIEW (DYNAMIC PLOTLY)
+# SPECTROGRAM VIEW (COMPACT)
 # ===================================
-
-st.divider()
 
 if st.session_state.audio_data is not None:
-    show_spectrograms = st.checkbox("Toggle Spectrogram View", value=False)
-    
-    if show_spectrograms:
-        st.header("📈 Spectrogram View (dB SPL)")
-
+    with st.expander("📈 Spectrogram View", expanded=False):
         spec_col1, spec_col2 = st.columns(2)
         
         with spec_col1:
-            st.subheader("Input Spectrogram (dB SPL)")
+            st.caption("Input Spectrogram")
             st.plotly_chart(st.session_state.input_spectrogram, use_container_width=True)
 
         with spec_col2:
-            st.subheader("Output Spectrogram (dB SPL)")
+            st.caption("Output Spectrogram")
             if st.session_state.eq_applied and st.session_state.output_spectrogram is not None:
                 st.plotly_chart(st.session_state.output_spectrogram, use_container_width=True)
             else:
-                st.info("Adjust sliders to see output spectrogram")
-
-st.divider()
-st.caption("Signal Equalizer • Task 3 DSP")
+                st.info("Adjust sliders")
