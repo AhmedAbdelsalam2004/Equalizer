@@ -40,6 +40,35 @@ def load_presets():
     except (FileNotFoundError, json.JSONDecodeError):
         return {}
 
+def load_generic_config():
+    """Loads saved generic mode slider configuration."""
+    config_path = os.path.join(os.path.dirname(__file__), "generic_config.json")
+    try:
+        with open(config_path, "r") as f:
+            bands = json.load(f)
+            for band in bands:
+                band["id"] = str(uuid.uuid4())
+            return bands
+    except (FileNotFoundError, json.JSONDecodeError):
+        return [{
+            "id": str(uuid.uuid4()),
+            "freq": 1000,
+            "gain": 1.0,
+            "bandwidth": 200
+        }]
+
+def save_generic_config(bands):
+    """Saves current generic mode slider configuration to JSON."""
+    config_path = os.path.join(os.path.dirname(__file__), "generic_config.json")
+    clean_bands = [{k: v for k, v in b.items() if k != 'id'} for b in bands]
+    try:
+        with open(config_path, "w") as f:
+            json.dump(clean_bands, f, indent=4)
+        return True
+    except Exception as e:
+        print(f"Error saving config: {e}")
+        return False
+
 @st.cache_resource
 def load_precomputed_ffts():
     fft_dir = os.path.join(os.path.dirname(__file__), "saved_ffts")
@@ -151,29 +180,79 @@ def create_audiogram_fig(fft_data_hash, fft_data_bytes, sample_rate, title, colo
     half = N // 2
     magnitude = np.abs(fft_data[:half])
     freqs = np.linspace(0, sample_rate / 2, half)
-    valid = freqs >= 100
-    freqs = freqs[valid]
-    magnitude = magnitude[valid]
-    if len(freqs) == 0:
-        freqs = np.array([100.0])
-        magnitude = np.array([1e-9])
-    dB_SPL = magnitude_to_dB_SPL(magnitude, sample_rate)
-    dB_HL = spl_to_dB_HL(dB_SPL, freqs)
+    
+    # Filter for standard audiometric frequencies
+    standard_freqs = np.array([250, 500, 1000, 2000, 4000, 8000])
+    valid_indices = []
+    for sf in standard_freqs:
+        if sf < sample_rate / 2:
+            # Find closest frequency bin
+            idx = (np.abs(freqs - sf)).argmin()
+            valid_indices.append(idx)
+            
+    if not valid_indices:
+        plot_freqs = np.array([1000.0])
+        plot_magnitude = np.array([1e-9])
+    else:
+        plot_freqs = freqs[valid_indices]
+        plot_magnitude = magnitude[valid_indices]
+
+    dB_SPL = magnitude_to_dB_SPL(plot_magnitude, sample_rate)
+    dB_HL = spl_to_dB_HL(dB_SPL, plot_freqs)
+    # Clip to standard audiogram range
     dB_HL = np.clip(dB_HL, -10, 120)
-    standard_freqs = [f for f in [125, 250, 500, 1000, 2000, 4000, 8000] if f <= sample_rate / 2]
+
     fig = go.Figure()
+    
+    # Plot with markers and lines, mimicking the style (using 'O' for this data)
     fig.add_trace(go.Scatter(
-        x=freqs, y=dB_HL, mode='lines',
-        line=dict(color=color, width=2), name=title
+        x=plot_freqs, y=dB_HL, 
+        mode='lines+markers',
+        line=dict(color=color, width=2),
+        marker=dict(symbol='circle-open', size=10, line=dict(width=2)),
+        name=title
     ))
+
+    # Define hearing loss severity ranges for Y-axis labels
+    y_tick_vals = [0, 20, 40, 55, 70, 90, 120]
+    y_tick_text = ["Normal", "Mild", "Moderate", "Moderately Severe", "Severe", "Profound", ""]
+    
     fig.update_layout(
-        title=dict(text=title, font=dict(size=12)),
-        xaxis_title="Frequency (Hz)", yaxis_title="Hearing Level (dB HL)",
-        margin=dict(l=35, r=10, t=30, b=10),
-        xaxis=dict(type="log", tickvals=standard_freqs, ticktext=[str(f) for f in standard_freqs],
-                   showgrid=True, gridcolor='#eee', range=[np.log10(100), np.log10(min(10000, sample_rate / 2))]),
-        yaxis=dict(showgrid=True, gridcolor='#eee', range=[120, -10]),
-        plot_bgcolor='rgba(0,0,0,0)', hovermode="x unified", height=200
+        title=dict(text=title, font=dict(size=14, color='#f3f4f6')),
+        xaxis=dict(
+            type="log",
+            tickvals=standard_freqs,
+            ticktext=[str(int(f)) for f in standard_freqs],
+            title=dict(text="Frequency (Hz)", font=dict(color='#9ca3af')),
+            tickfont=dict(color='#9ca3af'),
+            showgrid=True, gridcolor='#374151',
+            range=[np.log10(125), np.log10(10000)] # Slightly wider range for aesthetics
+        ),
+        yaxis=dict(
+            title=dict(text="Hearing Level (dB HL)", font=dict(color='#9ca3af')),
+            tickfont=dict(color='#9ca3af'),
+            range=[125, -15], # Reversed range from -15 to 125
+            showgrid=True, gridcolor='#374151',
+            zerolinecolor='#374151',
+            tickvals=np.arange(-10, 130, 10)
+        ),
+        # Add a secondary Y-axis for the severity labels on the right
+        yaxis2=dict(
+            overlaying='y',
+            side='right',
+            tickvals=y_tick_vals,
+            ticktext=y_tick_text,
+            tickfont=dict(color='#9ca3af', size=11),
+            range=[125, -15], # Match primary Y-axis range
+            showgrid=False,
+            zeroline=False
+        ),
+        margin=dict(l=50, r=80, t=40, b=30), # Increase right margin for labels
+        plot_bgcolor='rgba(0,0,0,0)', # Transparent background
+        paper_bgcolor='rgba(0,0,0,0)', # Transparent paper
+        hovermode="closest",
+        height=300,
+        legend=dict(font=dict(color='#f3f4f6'))
     )
     return fig
 
@@ -225,8 +304,13 @@ def amplitude_to_dB_SPL(S, sample_rate, n_fft=1024):
 
 
 def apply_gain_mask_to_fft(fft_data, full_freqs, bands, sample_rate):
+    """
+    Applies frequency band gains to the FFT data using a layering approach.
+    Later bands in the array overwrite earlier ones in overlapping regions.
+    """
     N = len(fft_data)
     gain_mask = np.ones(N, dtype=np.float32)
+    
     for band in bands:
         f0 = band["freq"]
         gain = band["gain"]
@@ -234,7 +318,8 @@ def apply_gain_mask_to_fft(fft_data, full_freqs, bands, sample_rate):
         low = max(0, f0 - bw / 2)
         high = min(sample_rate / 2, f0 + bw / 2)
         in_band = (np.abs(full_freqs) >= low) & (np.abs(full_freqs) <= high)
-        gain_mask[in_band] *= gain
+        gain_mask[in_band] = gain 
+
     magnitudes = np.abs(fft_data)
     phases = np.angle(fft_data)
     new_magnitudes = magnitudes * gain_mask
@@ -269,10 +354,10 @@ body {{ margin: 0; padding: 0; font-family: 'Inter', sans-serif; background: tra
 .audio-player {{
   background: #111827;
   border: 1px solid #374151;
-  border-radius: 12px; /* Slightly smaller radius */
-  padding: 12px;       /* Reduced padding */
+  border-radius: 12px;
+  padding: 12px;
   width: 100%;
-  height: 100vh;       /* Fill the iframe */
+  height: 100vh;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
@@ -285,9 +370,9 @@ body {{ margin: 0; padding: 0; font-family: 'Inter', sans-serif; background: tra
   background: #1f2937;
   border-radius: 8px;
   overflow: hidden;
-  flex-grow: 1;        /* Take available space */
-  min-height: 60px;    /* Minimum height safety */
-  margin-bottom: 10px; /* Reduced margin */
+  flex-grow: 1;
+  min-height: 50px;
+  margin-bottom: 4px;
   box-shadow: inset 0 2px 4px 0 rgba(0, 0, 0, 0.2);
 }}
 
@@ -300,6 +385,52 @@ canvas {{ display: block; width: 100%; height: 100%; }}
   color: #60a5fa; background: rgba(17, 24, 39, 0.8); 
   padding: 2px 6px; border-radius: 99px; 
   border: 1px solid rgba(96, 165, 250, 0.2);
+}}
+
+/* Timeline / Seek Bar */
+.progress-container {{
+  width: 100%;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  position: relative;
+  margin-bottom: 4px;
+}}
+
+.progress-track {{
+  width: 100%;
+  height: 4px;
+  background: #374151;
+  border-radius: 2px;
+  position: relative;
+}}
+
+.progress-fill {{
+  height: 100%;
+  background: #ef4444; /* Red color for fill */
+  width: 0%;
+  border-radius: 2px;
+  pointer-events: none;
+}}
+
+.progress-cursor {{
+  width: 12px;
+  height: 12px;
+  background: #ef4444; /* Red Cursor */
+  border: 2px solid white;
+  border-radius: 50%;
+  position: absolute;
+  top: 50%;
+  left: 0%;
+  transform: translate(-50%, -50%);
+  box-shadow: 0 2px 4px rgba(0,0,0,0.5);
+  pointer-events: none;
+  transition: transform 0.1s;
+}}
+
+.progress-container:hover .progress-cursor {{
+  transform: translate(-50%, -50%) scale(1.2);
 }}
 
 /* Controls */
@@ -321,7 +452,14 @@ canvas {{ display: block; width: 100%; height: 100%; }}
 <div class="audio-player">
   <div class="canvas-wrap">
     <canvas id="canvas-{player_id}"></canvas>
-    <div class="status" id="status-{player_id}">Ready</div>
+    <div class="status" id="status-{player_id}">Loading...</div>
+  </div>
+  
+  <div class="progress-container" id="progress-{player_id}">
+    <div class="progress-track">
+      <div class="progress-fill" id="fill-{player_id}"></div>
+      <div class="progress-cursor" id="cursor-{player_id}"></div>
+    </div>
   </div>
   
   <div class="controls">
@@ -349,6 +487,10 @@ canvas {{ display: block; width: 100%; height: 100%; }}
   const timeDisplay = document.getElementById('time-{player_id}');
   const statusDisplay = document.getElementById('status-{player_id}');
   
+  const progressBar = document.getElementById('progress-{player_id}');
+  const progressFill = document.getElementById('fill-{player_id}');
+  const progressCursor = document.getElementById('cursor-{player_id}');
+  
   let audioContext, analyser, audioBuffer, source;
   let isPlaying = false, animationId = null, startTime = 0, pauseTime = 0;
   const audioData = 'data:audio/wav;base64,{audio_b64}';
@@ -364,14 +506,27 @@ canvas {{ display: block; width: 100%; height: 100%; }}
     return m + ':' + (sec < 10 ? '0' : '') + sec; 
   }}
 
-  function updateTimeDisplay() {{
+  function getCurrentTime() {{
+    if (!audioBuffer) return 0;
+    const dur = audioBuffer.duration;
+    if (isPlaying) {{
+        return Math.min(audioContext.currentTime - startTime + pauseTime, dur);
+    }}
+    return Math.min(pauseTime, dur);
+  }}
+
+  function updateUI() {{
     if (!audioBuffer) return;
     const dur = audioBuffer.duration;
-    // Calculation fix: ensure we don't show time past duration
-    const cur = isPlaying 
-      ? Math.min(audioContext.currentTime - startTime + pauseTime, dur) 
-      : Math.min(pauseTime, dur);
+    const cur = getCurrentTime();
+    
+    // Update Text
     timeDisplay.textContent = formatTime(cur) + ' / ' + formatTime(dur);
+    
+    // Update Seek Bar (Red Cursor)
+    const pct = (cur / dur) * 100;
+    progressFill.style.width = pct + '%';
+    progressCursor.style.left = pct + '%';
   }}
 
   function resizeCanvas() {{ 
@@ -404,8 +559,17 @@ canvas {{ display: block; width: 100%; height: 100%; }}
       ctx.fill();
       x += barWidth + 1;
     }}
-    updateTimeDisplay();
-    if (isPlaying) animationId = requestAnimationFrame(drawVisualization);
+    
+    updateUI();
+    
+    if (isPlaying) {{
+        // Auto-stop at end
+        if (getCurrentTime() >= audioBuffer.duration) {{
+            stop();
+        }} else {{
+            animationId = requestAnimationFrame(drawVisualization);
+        }}
+    }}
   }}
   
   async function initAudio() {{
@@ -422,7 +586,7 @@ canvas {{ display: block; width: 100%; height: 100%; }}
       analyser.connect(audioContext.destination);
       statusDisplay.textContent = 'Ready';
       statusDisplay.style.color = '#34d399';
-      updateTimeDisplay();
+      updateUI();
     }} catch (error) {{
       console.error(error);
       statusDisplay.textContent = 'Error';
@@ -435,24 +599,17 @@ canvas {{ display: block; width: 100%; height: 100%; }}
     if (isPlaying) return;
     if (audioContext.state === 'suspended') await audioContext.resume();
 
+    // Restart logic
+    if (pauseTime >= audioBuffer.duration) {{
+        pauseTime = 0;
+    }}
+
     source = audioContext.createBufferSource();
     source.buffer = audioBuffer;
     source.connect(analyser);
     
-    // Resume from pauseTime
     startTime = audioContext.currentTime;
     source.start(0, pauseTime);
-    
-    // Handle natural finish
-    source.onended = () => {{
-      isPlaying = false; 
-      pauseTime = 0; // Reset only when naturally finished
-      setPlayState(false);
-      statusDisplay.textContent = 'Finished';
-      if (animationId) cancelAnimationFrame(animationId);
-      ctx.clearRect(0, 0, canvas.getBoundingClientRect().width, canvas.getBoundingClientRect().height);
-      updateTimeDisplay();
-    }};
     
     isPlaying = true;
     setPlayState(true);
@@ -462,35 +619,57 @@ canvas {{ display: block; width: 100%; height: 100%; }}
   
   function pause() {{
     if (!isPlaying || !source) return;
-    // CRITICAL FIX: Prevent onended from firing and resetting pauseTime
-    source.onended = null; 
     source.stop();
-    
-    // Calculate where we stopped
     pauseTime += audioContext.currentTime - startTime;
-    
     isPlaying = false;
     setPlayState(false);
     statusDisplay.textContent = 'Paused';
     if (animationId) cancelAnimationFrame(animationId);
+    updateUI();
   }}
   
   function stop() {{
     if (source) {{
-      source.onended = null; // Prevent trigger
       try {{ source.stop(); }} catch(e) {{}}
     }}
     isPlaying = false; 
-    pauseTime = 0; // Explicit reset
+    pauseTime = 0;
     setPlayState(false);
     statusDisplay.textContent = 'Stopped';
     if (animationId) cancelAnimationFrame(animationId);
     ctx.clearRect(0, 0, canvas.getBoundingClientRect().width, canvas.getBoundingClientRect().height);
-    updateTimeDisplay();
+    updateUI();
+  }}
+
+  // SEEKING LOGIC
+  function seek(e) {{
+    if (!audioBuffer) return;
+    const rect = progressBar.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const pct = Math.max(0, Math.min(1, x / rect.width));
+    const targetTime = pct * audioBuffer.duration;
+    
+    if (isPlaying) {{
+        // Stop current, restart at new time
+        source.stop();
+        source = audioContext.createBufferSource();
+        source.buffer = audioBuffer;
+        source.connect(analyser);
+        
+        pauseTime = targetTime;
+        startTime = audioContext.currentTime;
+        source.start(0, pauseTime);
+    }} else {{
+        // Just move the cursor
+        pauseTime = targetTime;
+        updateUI();
+    }}
   }}
   
   playBtn.onclick = async () => {{ if (isPlaying) pause(); else await play(); }};
   stopBtn.onclick = stop;
+  progressBar.onclick = seek;
+  
   window.addEventListener('load', () => {{ resizeCanvas(); initAudio(); }});
   window.addEventListener('resize', resizeCanvas);
 }})();
@@ -509,7 +688,7 @@ def init_session_state():
         'input_audio_b64': None,
         'input_fft_hash': None,
         'input_spec_data': None,
-        'eq_bands': [],
+        'eq_bands': load_generic_config(), # Load saved config on startup
         'output_audio_b64': None,
         'output_fft_data': None,
         'output_fft_hash': None,
@@ -572,18 +751,24 @@ def process_new_audio(uploaded_file):
     st.session_state.input_fft_hash = fft_hash
     st.session_state.input_spec_data = S_input_dB
     
-    st.session_state.eq_bands = []
-    st.session_state.output_audio_b64 = None
-    st.session_state.output_fft_data = None
-    st.session_state.output_fft_hash = None
-    st.session_state.output_spec_data = None
+    # Initialize Output to match Input immediately
+    st.session_state.output_audio_b64 = input_audio_b64
+    st.session_state.output_fft_data = fft_data
+    st.session_state.output_fft_hash = fft_hash
+    st.session_state.output_spec_data = S_input_dB
+    
+    # Reset processing states
     st.session_state.ai_audio_b64 = None
     st.session_state.ai_fft_data = None
     st.session_state.ai_fft_hash = None
     st.session_state.ai_spec_data = None
-    st.session_state.generic_hash = None
+    st.session_state.generic_hash = None # Reset hash to force recalculation if generic mode active
     st.session_state.preset_hashes = {}
     st.session_state.pending_ai_request = None
+    
+    # --- CHANGED: Apply Generic EQ immediately if saved settings exist ---
+    if st.session_state.current_mode == 'Generic Mode' and st.session_state.eq_bands:
+        process_generic_eq(st.session_state.eq_bands)
     
     return True
 
@@ -645,7 +830,8 @@ def process_generic_eq(bands):
     bands_tuple = tuple((b["freq"], b["gain"], b["bandwidth"]) for b in bands)
     current_hash = hash(bands_tuple)
     
-    if st.session_state.generic_hash == current_hash:
+    # Only return false if hash matches AND we are not forcing update (via reset hash)
+    if st.session_state.generic_hash == current_hash and st.session_state.generic_hash is not None:
         return False
     
     st.session_state.generic_hash = current_hash
@@ -676,7 +862,8 @@ def process_preset_eq(gains, mode):
     
     st.session_state.preset_hashes[mode] = current_hash
     
-    if PRECOMPUTED_DATA is not None:
+   # CHANGED: Only use linear subtraction for Human Voices Mode
+    if mode == "Human Voices Mode" and PRECOMPUTED_DATA is not None:
         modified_fft = apply_linear_subtraction(st.session_state.fft_data, gains, PRECOMPUTED_DATA)
     else:
         sources = PRESETS.get(mode, {})
@@ -701,11 +888,11 @@ def process_preset_eq(gains, mode):
 
 
 def run_ai_processing(gains, mode):
-    # Only run for AI modes
+    
     if mode not in ['Musical Instruments Mode', 'Animal Sounds Mode']:
         return
 
-    # Check server health if not already checked
+
     if st.session_state.ai_server_status is None:
         st.session_state.ai_server_status = AIAudioProcessor.get_available_servers()
 
@@ -774,7 +961,38 @@ def sidebar_controls():
     st.session_state.freq_scale = freq_scale
     
     mode_options = ["Generic Mode", "Musical Instruments Mode", "Animal Sounds Mode", "Human Voices Mode"]
-    mode = st.selectbox("Mode:", mode_options, key="mode_select")
+    
+    # Callback to reset output to input when mode changes
+    def on_mode_change():
+        # Check if we have audio loaded before trying to reset
+        if st.session_state.get('input_audio_b64') is not None:
+            # Copy Input data to Output data
+            st.session_state.output_audio_b64 = st.session_state.input_audio_b64
+            st.session_state.output_fft_data = st.session_state.fft_data
+            st.session_state.output_fft_hash = st.session_state.input_fft_hash
+            st.session_state.output_spec_data = st.session_state.input_spec_data
+            
+            # Clear AI data (hidden until processed)
+            st.session_state.ai_audio_b64 = None
+            st.session_state.ai_fft_data = None
+            st.session_state.ai_fft_hash = None
+            st.session_state.ai_spec_data = None
+            
+            # Reset processing triggers so new sliders work immediately
+            st.session_state.generic_hash = None
+            st.session_state.preset_hashes = {}
+            
+            # MODE SWITCH LOGIC
+            # If switching TO Generic Mode, load the saved config AND APPLY IT
+            if st.session_state.mode_select == 'Generic Mode':
+                st.session_state.eq_bands = load_generic_config()
+                # Apply immediately
+                process_generic_eq(st.session_state.eq_bands)
+            else:
+                # If switching AWAY from Generic Mode, clear the bands for UI cleanliness
+                st.session_state.eq_bands = []
+
+    mode = st.selectbox("Mode:", mode_options, key="mode_select", on_change=on_mode_change)
     st.session_state.current_mode = mode
     
     uploaded_file = st.file_uploader("Upload Audio", type=['wav', 'mp3', 'flac'], key="audio_uploader")
@@ -794,7 +1012,9 @@ def sidebar_controls():
 
 @st.fragment
 def generic_mode_sliders():
-    col_add, _ = st.columns([1, 5])
+    # Modified top row: Add Band and Save Config buttons
+    col_add, col_save, _ = st.columns([1, 1, 4])
+    
     with col_add:
         if st.button("Add Band", key="add_band_btn"):
             st.session_state.eq_bands.append({
@@ -803,8 +1023,23 @@ def generic_mode_sliders():
                 "gain": 1.0,
                 "bandwidth": 200
             })
+            
+    with col_save:
+        if st.button("Save Config", key="save_generic_btn"):
+            if save_generic_config(st.session_state.eq_bands):
+                st.toast("Configuration saved!", icon="💾")
+            else:
+                st.error("Failed to save configuration")
     
-    bands_to_remove = []
+    # --- NEW CALLBACK FUNCTION ---
+    # This runs BEFORE the fragment reruns, ensuring the deleted item is gone
+    # from the list before the loop iterates to draw sliders.
+    def delete_band_callback(band_id):
+        # 1. Remove from state
+        st.session_state.eq_bands = [b for b in st.session_state.eq_bands if b["id"] != band_id]
+        # 2. Update audio immediately so the sound reflects the removal
+        process_generic_eq(st.session_state.eq_bands)
+
     bands_changed = False
     
     for idx, band in enumerate(st.session_state.eq_bands):
@@ -812,8 +1047,9 @@ def generic_mode_sliders():
         freq = cols[0].slider(f"Freq (Hz)", 20, st.session_state.sample_rate // 2, int(band["freq"]), key=f"f_{band['id']}")
         gain = cols[1].slider(f"Gain", 0.0, 2.0, float(band["gain"]), key=f"g_{band['id']}")
         bw = cols[2].slider(f"Width", 10, 5000, int(band["bandwidth"]), key=f"b_{band['id']}")
-        if cols[3].button("X", key=f"d_{band['id']}"):
-            bands_to_remove.append(band["id"])
+        
+        # Use on_click callback for instant removal
+        cols[3].button("X", key=f"d_{band['id']}", on_click=delete_band_callback, args=(band["id"],))
         
         if band["freq"] != freq or band["gain"] != gain or band["bandwidth"] != bw:
             bands_changed = True
@@ -821,12 +1057,11 @@ def generic_mode_sliders():
         band["gain"] = gain
         band["bandwidth"] = bw
     
-    if bands_to_remove:
-        st.session_state.eq_bands = [b for b in st.session_state.eq_bands if b["id"] not in bands_to_remove]
-        bands_changed = True
-    
-    if bands_changed or bands_to_remove:
+    # Only process normal changes (sliders) here. 
+    # Deletions are handled by the callback above.
+    if bands_changed:
         process_generic_eq(st.session_state.eq_bands)
+        st.rerun() # <--- Forces output graphs and player to update immediately on slider drag
 
 
 @st.fragment
@@ -1024,25 +1259,25 @@ if st.session_state.audio_data is not None:
             render_ai_graph()
     
     st.markdown("---")
-    st.markdown("#### Spectrograms")
     
-    if is_ai_mode or has_ai:
-        spec_cols = st.columns(3)
-    elif has_output:
-        spec_cols = st.columns(2)
-    else:
-        spec_cols = [st.container()]
-    
-    with spec_cols[0]:
-        render_input_spectrogram()
-    
-    if has_output and len(spec_cols) > 1:
-        with spec_cols[1]:
-            render_output_spectrogram()
-    
-    if (is_ai_mode or has_ai) and len(spec_cols) > 2:
-        with spec_cols[2]:
-            render_ai_spectrogram()
+    with st.expander("Spectrograms", expanded=True):
+        if is_ai_mode or has_ai:
+            spec_cols = st.columns(3)
+        elif has_output:
+            spec_cols = st.columns(2)
+        else:
+            spec_cols = [st.container()]
+        
+        with spec_cols[0]:
+            render_input_spectrogram()
+        
+        if has_output and len(spec_cols) > 1:
+            with spec_cols[1]:
+                render_output_spectrogram()
+        
+        if (is_ai_mode or has_ai) and len(spec_cols) > 2:
+            with spec_cols[2]:
+                render_ai_spectrogram()
 
 else:
     st.info("Upload an audio file to get started")
