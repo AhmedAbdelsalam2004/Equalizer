@@ -15,7 +15,7 @@ SPLEETER_URL = "http://localhost:8080"
 ANIMAL_SERVER_URL = "http://localhost:5001"
 
 SPLEETER_STEMS = ['vocals', 'drums', 'bass', 'piano', 'other']
-ANIMAL_SOUNDS = ['duck', 'crow', 'owl', 'frog', 'turkey']
+ANIMAL_SOUNDS = ['duck', 'cow', 'tiger', 'Cricket']
 
 
 class AIAudioProcessor:

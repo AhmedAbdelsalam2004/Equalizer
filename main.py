@@ -303,10 +303,14 @@ def amplitude_to_dB_SPL(S, sample_rate, n_fft=1024):
     return np.clip(dB_SPL, 0, 120)
 
 
-def apply_gain_mask_to_fft(fft_data, full_freqs, bands, sample_rate):
+def apply_gain_mask_to_fft(fft_data, full_freqs, bands, sample_rate, use_multiplication=False):
     """
-    Applies frequency band gains to the FFT data using a layering approach.
-    Later bands in the array overwrite earlier ones in overlapping regions.
+    Applies frequency band gains to the FFT data.
+    
+    Args:
+        use_multiplication (bool): 
+            If False (Generic Mode): Later bands OVERWRITE earlier ones (=).
+            If True (Preset Mode): Bands MULTIPLY together (*=) to allow stacking mutes.
     """
     N = len(fft_data)
     gain_mask = np.ones(N, dtype=np.float32)
@@ -318,7 +322,12 @@ def apply_gain_mask_to_fft(fft_data, full_freqs, bands, sample_rate):
         low = max(0, f0 - bw / 2)
         high = min(sample_rate / 2, f0 + bw / 2)
         in_band = (np.abs(full_freqs) >= low) & (np.abs(full_freqs) <= high)
-        gain_mask[in_band] = gain 
+        
+        # --- FIXED: Logic Branching based on Mode ---
+        if use_multiplication:
+            gain_mask[in_band] *= gain # Accumulate gains (Preset Mode)
+        else:
+            gain_mask[in_band] = gain  # Overwrite gains (Generic Mode)
 
     magnitudes = np.abs(fft_data)
     phases = np.angle(fft_data)
@@ -836,11 +845,13 @@ def process_generic_eq(bands):
     
     st.session_state.generic_hash = current_hash
     
+    # --- FIXED: Use Assignment (=) for Generic Mode ---
     modified_fft = apply_gain_mask_to_fft(
         st.session_state.fft_data,
         st.session_state.full_freqs,
         bands,
-        st.session_state.sample_rate
+        st.session_state.sample_rate,
+        use_multiplication=False
     )
     
     equalized_full = cooley_tukey_ifft(modified_fft)
@@ -872,11 +883,14 @@ def process_preset_eq(gains, mode):
             g_val = gains[i] if i < len(gains) else 1.0
             for center, bw in sources[s_name]:
                 preset_bands.append({"freq": center, "gain": g_val, "bandwidth": bw})
+        
+        # --- FIXED: Use Multiplication (*=) for Preset Mode to handle overlaps ---
         modified_fft = apply_gain_mask_to_fft(
             st.session_state.fft_data,
             st.session_state.full_freqs,
             preset_bands,
-            st.session_state.sample_rate
+            st.session_state.sample_rate,
+            use_multiplication=True
         )
     
     equalized_full = cooley_tukey_ifft(modified_fft)
