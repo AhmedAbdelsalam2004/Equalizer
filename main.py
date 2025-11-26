@@ -371,6 +371,7 @@ body {{ margin: 0; padding: 0; font-family: 'Inter', sans-serif; background: tra
   flex-direction: column;
   justify-content: space-between;
   color: #f3f4f6;
+  user-select: none; /* Prevent text selection while dragging */
 }}
 
 /* Visualization */
@@ -405,6 +406,7 @@ canvas {{ display: block; width: 100%; height: 100%; }}
   cursor: pointer;
   position: relative;
   margin-bottom: 4px;
+  touch-action: none; /* Prevent scrolling on mobile while seeking */
 }}
 
 .progress-track {{
@@ -417,16 +419,17 @@ canvas {{ display: block; width: 100%; height: 100%; }}
 
 .progress-fill {{
   height: 100%;
-  background: #ef4444; /* Red color for fill */
+  background: #ef4444; 
   width: 0%;
   border-radius: 2px;
   pointer-events: none;
+  /* Removed transition here to make dragging instant/snappy */
 }}
 
 .progress-cursor {{
   width: 12px;
   height: 12px;
-  background: #ef4444; /* Red Cursor */
+  background: #ef4444; 
   border: 2px solid white;
   border-radius: 50%;
   position: absolute;
@@ -435,7 +438,8 @@ canvas {{ display: block; width: 100%; height: 100%; }}
   transform: translate(-50%, -50%);
   box-shadow: 0 2px 4px rgba(0,0,0,0.5);
   pointer-events: none;
-  transition: transform 0.1s;
+  /* Only animate transform (scale), not left position, for instant drag response */
+  transition: transform 0.1s; 
 }}
 
 .progress-container:hover .progress-cursor {{
@@ -502,6 +506,7 @@ canvas {{ display: block; width: 100%; height: 100%; }}
   
   let audioContext, analyser, audioBuffer, source;
   let isPlaying = false, animationId = null, startTime = 0, pauseTime = 0;
+  let isDragging = false; // NEW: Track drag state
   const audioData = 'data:audio/wav;base64,{audio_b64}';
   
   function setPlayState(playing) {{
@@ -525,14 +530,16 @@ canvas {{ display: block; width: 100%; height: 100%; }}
   }}
 
   function updateUI() {{
-    if (!audioBuffer) return;
+    // Don't fight the mouse while dragging
+    if (isDragging || !audioBuffer) return; 
+
     const dur = audioBuffer.duration;
     const cur = getCurrentTime();
     
     // Update Text
     timeDisplay.textContent = formatTime(cur) + ' / ' + formatTime(dur);
     
-    // Update Seek Bar (Red Cursor)
+    // Update Seek Bar
     const pct = (cur / dur) * 100;
     progressFill.style.width = pct + '%';
     progressCursor.style.left = pct + '%';
@@ -572,7 +579,6 @@ canvas {{ display: block; width: 100%; height: 100%; }}
     updateUI();
     
     if (isPlaying) {{
-        // Auto-stop at end
         if (getCurrentTime() >= audioBuffer.duration) {{
             stop();
         }} else {{
@@ -608,7 +614,6 @@ canvas {{ display: block; width: 100%; height: 100%; }}
     if (isPlaying) return;
     if (audioContext.state === 'suspended') await audioContext.resume();
 
-    // Restart logic
     if (pauseTime >= audioBuffer.duration) {{
         pauseTime = 0;
     }}
@@ -650,34 +655,76 @@ canvas {{ display: block; width: 100%; height: 100%; }}
     updateUI();
   }}
 
-  // SEEKING LOGIC
-  function seek(e) {{
-    if (!audioBuffer) return;
+  // --- DRAG / SLIDER LOGIC ---
+  
+  function getProgressFromEvent(e) {{
     const rect = progressBar.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const pct = Math.max(0, Math.min(1, x / rect.width));
-    const targetTime = pct * audioBuffer.duration;
-    
-    if (isPlaying) {{
-        // Stop current, restart at new time
+    const clientX = e.clientX || (e.touches && e.touches[0].clientX);
+    const x = clientX - rect.left;
+    return Math.max(0, Math.min(1, x / rect.width));
+  }}
+
+  function updateVisualsForDrag(pct) {{
+     progressFill.style.width = (pct * 100) + '%';
+     progressCursor.style.left = (pct * 100) + '%';
+     if (audioBuffer) {{
+       const t = pct * audioBuffer.duration;
+       timeDisplay.textContent = formatTime(t) + ' / ' + formatTime(audioBuffer.duration);
+     }}
+  }}
+
+  async function handleSeek(pct) {{
+     if (!audioBuffer) return;
+     const targetTime = pct * audioBuffer.duration;
+     
+     // Initialize if needed (clicking bar before playing)
+     if (!audioContext) await initAudio();
+     
+     if (isPlaying) {{
         source.stop();
         source = audioContext.createBufferSource();
         source.buffer = audioBuffer;
         source.connect(analyser);
-        
         pauseTime = targetTime;
         startTime = audioContext.currentTime;
         source.start(0, pauseTime);
-    }} else {{
-        // Just move the cursor
+     }} else {{
         pauseTime = targetTime;
         updateUI();
-    }}
+     }}
   }}
+
+  function onMouseDown(e) {{
+    isDragging = true;
+    const pct = getProgressFromEvent(e);
+    updateVisualsForDrag(pct);
+  }}
+
+  function onMouseMove(e) {{
+    if (!isDragging) return;
+    const pct = getProgressFromEvent(e);
+    updateVisualsForDrag(pct);
+  }}
+
+  async function onMouseUp(e) {{
+    if (!isDragging) return;
+    isDragging = false;
+    const pct = getProgressFromEvent(e);
+    await handleSeek(pct);
+  }}
+
+  // Add Listeners
+  progressBar.addEventListener('mousedown', onMouseDown);
+  document.addEventListener('mousemove', onMouseMove);
+  document.addEventListener('mouseup', onMouseUp);
+  
+  // Touch support for mobile
+  progressBar.addEventListener('touchstart', onMouseDown);
+  document.addEventListener('touchmove', onMouseMove);
+  document.addEventListener('touchend', onMouseUp);
   
   playBtn.onclick = async () => {{ if (isPlaying) pause(); else await play(); }};
   stopBtn.onclick = stop;
-  progressBar.onclick = seek;
   
   window.addEventListener('load', () => {{ resizeCanvas(); initAudio(); }});
   window.addEventListener('resize', resizeCanvas);
