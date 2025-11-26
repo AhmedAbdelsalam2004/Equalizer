@@ -953,7 +953,6 @@ def run_ai_processing(gains, mode):
     if mode not in ['Musical Instruments Mode', 'Animal Sounds Mode']:
         return
 
-
     if st.session_state.ai_server_status is None:
         st.session_state.ai_server_status = AIAudioProcessor.get_available_servers()
 
@@ -965,55 +964,29 @@ def run_ai_processing(gains, mode):
 
     sources = PRESETS.get(mode, {})
     
-    # --- LOGIC BRANCHING ---
+    # Build adjustments dictionary for both modes
+    adjustments = {}
+    any_active = False
     
-    # CASE A: Animal Sounds Mode (Supports Dictionary/Multi-mix)
-    if mode == 'Animal Sounds Mode':
-        adjustments = {}
-        any_active = False
-        
-        # Collect all slider values into one dictionary
-        for i, source_name in enumerate(sources):
-            gain = gains[i] if i < len(gains) else 1.0
-            adjustments[source_name] = gain
-            # Check if at least one slider is modifying the sound
-            if abs(gain - 1.0) > 0.01:
-                any_active = True
-        
-        # If there are adjustments, send the whole dictionary
-        if any_active:
-            result = AIAudioProcessor.process_audio(
-                audio_data=st.session_state.audio_data,
-                sample_rate=st.session_state.sample_rate,
-                mode=mode,
-                classifier=adjustments, # <--- Passing Dict here
-                loudness=None,
-                progress_callback=None
-            )
-            if result is not None:
-                ai_audio, ai_sr = result
-                update_ai_output(ai_audio)
-
-    # CASE B: Musical Instruments Mode (Spleeter - Single Stem Focus)
-    else:
-        # Keep original logic: find the first modified stem and process it
-        for i, source_name in enumerate(sources):
-            gain = gains[i] if i < len(gains) else 1.0
-            if abs(gain - 1.0) > 0.01:
-                result = AIAudioProcessor.process_audio(
-                    audio_data=st.session_state.audio_data,
-                    sample_rate=st.session_state.sample_rate,
-                    mode=mode,
-                    classifier=source_name, # <--- Passing String here
-                    loudness=gain,
-                    progress_callback=None
-                )
-                if result is not None:
-                    ai_audio, ai_sr = result
-                    update_ai_output(ai_audio)
-                break
-
-
+    for i, source_name in enumerate(sources):
+        gain = gains[i] if i < len(gains) else 1.0
+        adjustments[source_name] = gain
+        # Check if at least one slider is modifying the sound
+        if abs(gain - 1.0) > 0.01:
+            any_active = True
+    
+    # Only process if there are actual adjustments
+    if any_active:
+        result = AIAudioProcessor.process_audio(
+            audio_data=st.session_state.audio_data,
+            sample_rate=st.session_state.sample_rate,
+            mode=mode,
+            adjustments=adjustments,  # <--- Now passing dictionary for BOTH modes
+            progress_callback=None
+        )
+        if result is not None:
+            ai_audio, ai_sr = result
+            update_ai_output(ai_audio)
 
 def sidebar_controls():
     st.subheader("Configuration")

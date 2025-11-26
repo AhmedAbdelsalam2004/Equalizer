@@ -1,6 +1,7 @@
 """
 AI Audio Processor Module
 Handles communication with AI audio processing servers (Spleeter & Animal Sound Separator)
+Both servers now use the same array-based adjustment pattern.
 """
 
 import requests
@@ -38,15 +39,28 @@ class AIAudioProcessor:
     def process_with_spleeter(
         audio_data: np.ndarray,
         sample_rate: int,
-        stem: str,
-        loudness: float,
+        adjustments: Dict[str, float],
         progress_callback=None
     ) -> Optional[Tuple[np.ndarray, int]]:
-        if stem not in SPLEETER_STEMS:
-            raise ValueError(f"Invalid stem. Must be one of: {SPLEETER_STEMS}")
+        """
+        Process audio with Spleeter using multiple stem adjustments.
         
-        if loudness < 0:
-            raise ValueError("Loudness must be non-negative")
+        Args:
+            audio_data: Audio data as numpy array
+            sample_rate: Sample rate of the audio
+            adjustments: Dictionary of stem adjustments, e.g., {'vocals': 1.5, 'drums': 0.5}
+            progress_callback: Optional callback for progress updates
+        
+        Returns:
+            Tuple of (processed_audio, sample_rate) or None on failure
+        """
+        
+        # Validation
+        for stem, gain in adjustments.items():
+            if stem not in SPLEETER_STEMS:
+                raise ValueError(f"Invalid stem: {stem}. Must be: {SPLEETER_STEMS}")
+            if gain < 0:
+                raise ValueError(f"Loudness for {stem} must be non-negative")
         
         original_length = len(audio_data)
         original_sr = sample_rate
@@ -60,14 +74,14 @@ class AIAudioProcessor:
             audio_buffer.seek(0)
             
             if progress_callback:
-                progress_callback(0.2, f"Sending to Spleeter server (adjusting {stem})...")
+                progress_callback(0.2, f"Sending to Spleeter server (applying {len(adjustments)} adjustments)...")
             
             files = {
                 'file': ('input.wav', audio_buffer, 'audio/wav')
             }
+            # Send dictionary as JSON string
             data = {
-                'classifier': stem,
-                'loudness': str(loudness)
+                'adjustments': json.dumps(adjustments)
             }
             
             response = requests.post(
@@ -239,31 +253,34 @@ class AIAudioProcessor:
         audio_data: np.ndarray,
         sample_rate: int,
         mode: str,
-        classifier: Union[str, Dict[str, float]], 
-        loudness: Optional[float] = None,
+        adjustments: Dict[str, float],
         progress_callback=None
     ) -> Optional[Tuple[np.ndarray, int]]:
+        """
+        Unified audio processing method for both modes.
+        
+        Args:
+            audio_data: Audio data as numpy array
+            sample_rate: Sample rate of the audio
+            mode: Either 'Musical Instruments Mode' or 'Animal Sounds Mode'
+            adjustments: Dictionary of adjustments, e.g., {'vocals': 1.5, 'drums': 0.5}
+            progress_callback: Optional callback for progress updates
+        
+        Returns:
+            Tuple of (processed_audio, sample_rate) or None on failure
+        """
+        
+        if not isinstance(adjustments, dict):
+            raise ValueError("Adjustments must be a dictionary")
         
         if mode == 'Musical Instruments Mode':
-            # Spleeter expects a single string classifier and a float loudness
-            if not isinstance(classifier, str) or loudness is None:
-                 raise ValueError("Musical Mode requires 'classifier' (str) and 'loudness' (float)")
             return cls.process_with_spleeter(
-                audio_data, sample_rate, classifier, loudness, progress_callback
+                audio_data, sample_rate, adjustments, progress_callback
             )
             
         elif mode == 'Animal Sounds Mode':
-            # Animal Mode now expects a dictionary of adjustments
-            if isinstance(classifier, dict):
-                return cls.process_with_animal_separator(
-                    audio_data, sample_rate, classifier, progress_callback
-                )
-            # Backward compatibility
-            elif isinstance(classifier, str) and loudness is not None:
-                return cls.process_with_animal_separator(
-                    audio_data, sample_rate, {classifier: loudness}, progress_callback
-                )
-            else:
-                raise ValueError("Animal Mode requires a dictionary of adjustments or classifier/loudness pair")
+            return cls.process_with_animal_separator(
+                audio_data, sample_rate, adjustments, progress_callback
+            )
         else:
             raise ValueError(f"Invalid mode: {mode}")

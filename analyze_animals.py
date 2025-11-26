@@ -10,10 +10,10 @@ TOP_N_PEAKS = 5
 
 # Update these to match the specific folders you listed in your desired output
 ANIMAL_DIRS = {
-    "duck": r"template_dir\duck",
-    "cow": r"template_dir\cow",
-    "tiger": r"template_dir\lion",
-    "Cricket": r"template_dir\Cricket"
+    "vocals": r"template_dir\vocals",
+    "drums": r"template_dir\drums",
+    "piano": r"template_dir\piano",
+    "bass": r"template_dir\bass"
 }
 
 AUDIO_EXTENSIONS = ('.mp3', '.wav', '.flac', '.ogg')
